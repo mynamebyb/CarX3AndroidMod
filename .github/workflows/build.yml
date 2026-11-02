@@ -1,0 +1,32 @@
+name: Build CarX3AndroidMod
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y wget unzip
+          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Build
+        run: |
+          $NDK/ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./jni/Android.mk NDK_APPLICATION_MK=./jni/Application.mk V=1 2>&1 | tee build.log
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: carx3mod-so
+          path: |
+            libs/arm64-v8a/libcarx3mod.so
+            build.log
