@@ -1,86 +1,81 @@
 //
-//  mod.cpp - CarX3 Drift Points Multiplier (Android arm64)
+//  mod.cpp - CarX3 Mod (safe minimal version)
+//  JNI_OnLoad/constructor 极简，立刻返回，不碰主线程
+//  子线程延时等待 il2cpp 就绪后再操作
 //
-#include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
-#include <string.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <string.h>
 
 #define LOG_TAG "CarX3Mod"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-typedef void* Il2CppClass;
-typedef void* Il2CppObject;
 typedef void* Il2CppDomain;
 typedef void* Il2CppThread;
+typedef void* Il2CppClass;
 
 static Il2CppDomain* (*il2cpp_domain_get)(void) = nullptr;
 static Il2CppThread* (*il2cpp_thread_attach)(Il2CppDomain*) = nullptr;
 static Il2CppClass* (*il2cpp_class_from_name)(void* image, const char* ns, const char* name) = nullptr;
-static void* (*il2cpp_class_get_method_from_name)(Il2CppClass* klass, const char* name, int argsCount) = nullptr;
-static void* (*il2cpp_runtime_invoke)(void* method, void* obj, void** params, void** exc) = nullptr;
 static void* (*il2cpp_class_get_field_from_name)(Il2CppClass* klass, const char* name) = nullptr;
-static void (*il2cpp_field_get_value)(void* obj, void* field, void* value) = nullptr;
-static void (*il2cpp_field_set_value)(void* obj, void* field, void* value) = nullptr;
 static void* (*il2cpp_domain_assembly_open)(Il2CppDomain* domain, const char* name) = nullptr;
 static void* (*il2cpp_assembly_get_image)(void* assembly) = nullptr;
 
-static void* load_il2cpp_api() {
-    void* handle = dlopen("libil2cpp.so", RTLD_NOW);
-    if (!handle) return nullptr;
-    il2cpp_domain_get = (decltype(il2cpp_domain_get))dlsym(handle, "il2cpp_domain_get");
-    il2cpp_thread_attach = (decltype(il2cpp_thread_attach))dlsym(handle, "il2cpp_thread_attach");
-    il2cpp_class_from_name = (decltype(il2cpp_class_from_name))dlsym(handle, "il2cpp_class_from_name");
-    il2cpp_class_get_method_from_name = (decltype(il2cpp_class_get_method_from_name))dlsym(handle, "il2cpp_class_get_method_from_name");
-    il2cpp_runtime_invoke = (decltype(il2cpp_runtime_invoke))dlsym(handle, "il2cpp_runtime_invoke");
-    il2cpp_class_get_field_from_name = (decltype(il2cpp_class_get_field_from_name))dlsym(handle, "il2cpp_class_get_field_from_name");
-    il2cpp_field_get_value = (decltype(il2cpp_field_get_value))dlsym(handle, "il2cpp_field_get_value");
-    il2cpp_field_set_value = (decltype(il2cpp_field_set_value))dlsym(handle, "il2cpp_field_set_value");
-    il2cpp_domain_assembly_open = (decltype(il2cpp_domain_assembly_open))dlsym(handle, "il2cpp_domain_assembly_open");
-    il2cpp_assembly_get_image = (decltype(il2cpp_assembly_get_image))dlsym(handle, "il2cpp_assembly_get_image");
-    if (!il2cpp_domain_get || !il2cpp_class_from_name) return nullptr;
-    LOGI("il2cpp API loaded");
-    return handle;
-}
-
 static void* mod_thread(void* arg) {
-    void* handle = nullptr;
-    for (int i = 0; i < 120; i++) {
-        handle = load_il2cpp_api();
-        if (handle) break;
+    LOGI("mod thread started, sleeping 15s...");
+    sleep(15);  // 等游戏完全启动
+
+    // 等 libil2cpp.so 可用
+    void* il2cpp = nullptr;
+    for (int i = 0; i < 60; i++) {
+        il2cpp = dlopen("libil2cpp.so", RTLD_NOW);
+        if (il2cpp) break;
         sleep(1);
     }
-    if (!handle) { LOGE("no il2cpp"); return nullptr; }
+    if (!il2cpp) { LOGE("libil2cpp.so not found"); return nullptr; }
+    LOGI("libil2cpp.so loaded");
+
+    // 拿函数指针
+    il2cpp_domain_get = (void*(*)(void))dlsym(il2cpp, "il2cpp_domain_get");
+    il2cpp_thread_attach = (void*(*)(void*))dlsym(il2cpp, "il2cpp_thread_attach");
+    il2cpp_class_from_name = (void*(*)(void*, const char*, const char*))dlsym(il2cpp, "il2cpp_class_from_name");
+    il2cpp_class_get_field_from_name = (void*(*)(void*, const char*))dlsym(il2cpp, "il2cpp_class_get_field_from_name");
+    il2cpp_domain_assembly_open = (void*(*)(void*, const char*))dlsym(il2cpp, "il2cpp_domain_assembly_open");
+    il2cpp_assembly_get_image = (void*(*)(void*))dlsym(il2cpp, "il2cpp_assembly_get_image");
+
+    if (!il2cpp_domain_get || !il2cpp_class_from_name) {
+        LOGE("il2cpp symbols missing");
+        return nullptr;
+    }
+    LOGI("il2cpp symbols resolved");
 
     Il2CppDomain* domain = il2cpp_domain_get();
     il2cpp_thread_attach(domain);
+    LOGI("thread attached to il2cpp");
 
-    void* assembly = il2cpp_domain_assembly_open(domain, "Assembly-CSharp");
-    if (!assembly) { LOGE("no Assembly-CSharp"); return nullptr; }
-    void* image = il2cpp_assembly_get_image(assembly);
+    void* asm_ = il2cpp_domain_assembly_open(domain, "Assembly-CSharp");
+    if (!asm_) { LOGE("Assembly-CSharp not found"); return nullptr; }
+    void* image = il2cpp_assembly_get_image(asm_);
 
     Il2CppClass* cls = il2cpp_class_from_name(image, "", "DriftPointsModel");
-    LOGI("DriftPointsModel: %p", cls);
-
-    void* f_speed = il2cpp_class_get_field_from_name(cls, "<pointsEarnSpeed>k__BackingField");
-    void* f_combo = il2cpp_class_get_field_from_name(cls, "<comboMultiplier>k__BackingField");
-    LOGI("fields: speed=%p combo=%p", f_speed, f_combo);
+    LOGI("DriftPointsModel = %p", cls);
 
     Il2CppClass* rcls = il2cpp_class_from_name(image, "", "AmpRaceRewardsModel");
-    LOGI("AmpRaceRewardsModel: %p", rcls);
+    LOGI("AmpRaceRewardsModel = %p", rcls);
 
-    LOGI("=== Mod ready ===");
+    LOGI("=== mod init done ===");
     return nullptr;
 }
 
 __attribute__((constructor))
 static void mod_init() {
-    LOGI("CarX3Mod .so loaded");
+    LOGI("mod .so loaded (constructor)");
     pthread_t tid;
     pthread_create(&tid, nullptr, mod_thread, nullptr);
     pthread_detach(tid);
+    // 立刻返回，不在主线程做任何事
 }
